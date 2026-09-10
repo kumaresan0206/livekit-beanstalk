@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  livekit:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: livekit-server
+    network_mode: "host"
+    restart: always
+    environment:
+      - SECRET_NAME=${SECRET_NAME}
+      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-ap-southeast-1}
+      - AWS_REGION=${AWS_REGION:-ap-southeast-1}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7880/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

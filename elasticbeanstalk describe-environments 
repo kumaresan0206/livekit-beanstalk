@@ -1,0 +1,14 @@
+{
+    "ApplicationVersion": {
+        "ApplicationVersionArn": "arn:aws:elasticbeanstalk:ap-southeast-1:698032826194:applicationversion/livekit-server/livekit-v20260910124838",
+        "ApplicationName": "livekit-server",
+        "VersionLabel": "livekit-v20260910124838",
+        "SourceBundle": {
+            "S3Bucket": "elasticbeanstalk-ap-southeast-1-698032826194",
+            "S3Key": "livekit-deploy-20260910124838.zip"
+        },
+        "DateCreated": "2026-09-10T12:48:48.319000+00:00",
+        "DateUpdated": "2026-09-10T12:48:48.319000+00:00",
+        "Status": "UNPROCESSED"
+    }
+}

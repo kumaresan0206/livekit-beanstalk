@@ -1,0 +1,38 @@
+name: Deploy LiveKit to AWS Elastic Beanstalk
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+env:
+  AWS_REGION: ap-southeast-1
+  STACK_NAME: livekit-beanstalk-stack
+  APP_NAME: livekit-server
+  ENV_NAME: livekit-production
+  INSTANCE_TYPE: t3.medium
+  CERTIFICATE_ARN: ${{ secrets.ACM_CERTIFICATE_ARN }}
+
+jobs:
+  deploy:
+    name: Deploy to Elastic Beanstalk (Production)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Make deploy script executable
+        run: chmod +x deploy.sh
+
+      - name: Execute Deployment Coordinator
+        run: ./deploy.sh

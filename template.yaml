@@ -1,0 +1,257 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Production CloudFormation Template for Standalone LiveKit WebRTC Server on AWS Elastic Beanstalk (1-Instance Architecture with Explicit Security Groups).
+
+Parameters:
+  ApplicationName:
+    Type: String
+    Default: livekit-server
+    Description: Elastic Beanstalk Application Name
+
+  EnvironmentName:
+    Type: String
+    Default: livekit-production
+    Description: Elastic Beanstalk Environment Name
+
+  SolutionStackName:
+    Type: String
+    Default: "64bit Amazon Linux 2023 v4.13.7 running Docker"
+    Description: Elastic Beanstalk Platform Solution Stack Name (Docker on Amazon Linux 2023)
+
+  InstanceType:
+    Type: String
+    Default: t3.medium
+    AllowedValues:
+      - t3.micro
+      - t3.small
+      - t3.medium
+      - t3.large
+      - c6i.large
+      - c6i.xlarge
+      - c7g.large
+    Description: EC2 Instance Type (t3.medium cost-effective baseline; c6i.large for high-traffic production)
+
+  MinInstances:
+    Type: Number
+    Default: 1
+    Description: Minimum number of EC2 instances (1-Instance Standalone Architecture)
+
+  MaxInstances:
+    Type: Number
+    Default: 1
+    Description: Maximum number of EC2 instances (1-Instance Standalone Architecture)
+
+
+Resources:
+  # ----------------------------------------------------------------------
+  # 1. AWS Secrets Manager (Auto-Generated Cryptographic API Credentials)
+  # ----------------------------------------------------------------------
+  LiveKitSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${EnvironmentName}/livekit-credentials"
+      Description: LiveKit Server environment-derived API key and auto-generated cryptographic secret
+      GenerateSecretString:
+        SecretStringTemplate: !Sub '{"api_key": "LK_${AWS::StackName}_${AWS::Region}"}'
+        GenerateStringKey: "api_secret"
+        PasswordLength: 32
+        ExcludePunctuation: true
+
+  # ----------------------------------------------------------------------
+  # 2. Dedicated WebRTC Security Group (Eliminates fragile EB logical IDs)
+  # ----------------------------------------------------------------------
+  LiveKitSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Explicit Security Group for LiveKit WebRTC media and ICE traffic
+      SecurityGroupIngress:
+        # Signaling & ALB Health Check (Port 7880)
+        - IpProtocol: tcp
+          FromPort: 7880
+          ToPort: 7880
+          CidrIp: 0.0.0.0/0
+          Description: LiveKit HTTP/WSS Signaling and Health Checks (Port 7880)
+        # WebRTC RTP Audio/Video Media Range
+        - IpProtocol: udp
+          FromPort: 50000
+          ToPort: 60000
+          CidrIp: 0.0.0.0/0
+          Description: WebRTC RTP Media Range (UDP 50000-60000)
+        # WebRTC ICE TCP Fallback
+        - IpProtocol: tcp
+          FromPort: 7881
+          ToPort: 7881
+          CidrIp: 0.0.0.0/0
+          Description: WebRTC ICE TCP Fallback (Port 7881)
+
+  # ----------------------------------------------------------------------
+  # 3. IAM Roles & Instance Profile
+  # ----------------------------------------------------------------------
+  LiveKitEC2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${EnvironmentName}-ec2-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSElasticBeanstalkWebTier
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: LiveKitSecretsManagerScopedReadPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:DescribeSecret
+                Resource: !Ref LiveKitSecret
+
+  LiveKitInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub "${EnvironmentName}-instance-profile"
+      Roles:
+        - !Ref LiveKitEC2Role
+
+  LiveKitServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${EnvironmentName}-service-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: elasticbeanstalk.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSElasticBeanstalkEnhancedHealth
+        - arn:aws:iam::aws:policy/AWSElasticBeanstalkManagedUpdatesCustomerRolePolicy
+
+  # ----------------------------------------------------------------------
+  # 4. Elastic Beanstalk Application & Environment
+  # ----------------------------------------------------------------------
+  LiveKitApplication:
+    Type: AWS::ElasticBeanstalk::Application
+    Properties:
+      ApplicationName: !Ref ApplicationName
+      Description: Standalone LiveKit WebRTC Server Application on Elastic Beanstalk
+
+  LiveKitEnvironment:
+    Type: AWS::ElasticBeanstalk::Environment
+    Properties:
+      ApplicationName: !Ref LiveKitApplication
+      EnvironmentName: !Ref EnvironmentName
+      Description: Standalone LiveKit Environment (1-Instance, Docker AL2023, Load-Balanced ALB)
+      SolutionStackName: !Ref SolutionStackName
+      OptionSettings:
+        # Load Balancer Configuration: Explicit Application Load Balancer
+        - Namespace: aws:elasticbeanstalk:environment
+          OptionName: EnvironmentType
+          Value: LoadBalanced
+        - Namespace: aws:elasticbeanstalk:environment
+          OptionName: LoadBalancerType
+          Value: application
+        - Namespace: aws:elasticbeanstalk:environment
+          OptionName: ServiceRole
+          Value: !Ref LiveKitServiceRole
+
+        # Public IP configuration for EC2 instances (Required for WebRTC Direct UDP)
+        - Namespace: aws:ec2:vpc
+          OptionName: AssociatePublicIpAddress
+          Value: 'true'
+
+        # IAM & Security Group Configuration
+        - Namespace: aws:autoscaling:launchconfiguration
+          OptionName: IamInstanceProfile
+          Value: !Ref LiveKitInstanceProfile
+        - Namespace: aws:autoscaling:launchconfiguration
+          OptionName: InstanceType
+          Value: !Ref InstanceType
+        - Namespace: aws:autoscaling:launchconfiguration
+          OptionName: SecurityGroups
+          Value: !Ref LiveKitSecurityGroup
+
+        # Capacity Configuration (1-Instance Standalone Architecture)
+        - Namespace: aws:autoscaling:asg
+          OptionName: MinSize
+          Value: !Ref MinInstances
+        - Namespace: aws:autoscaling:asg
+          OptionName: MaxSize
+          Value: !Ref MaxInstances
+        - Namespace: aws:autoscaling:asg
+          OptionName: Cooldown
+          Value: '180'
+
+        # ALB Target Group Health Check on / (Port 7880)
+        - Namespace: aws:elasticbeanstalk:application
+          OptionName: Application Healthcheck URL
+          Value: /
+        - Namespace: aws:elasticbeanstalk:environment:process:default
+          OptionName: Port
+          Value: '7880'
+        - Namespace: aws:elasticbeanstalk:environment:process:default
+          OptionName: Protocol
+          Value: HTTP
+        - Namespace: aws:elasticbeanstalk:environment:process:default
+          OptionName: HealthCheckPath
+          Value: /
+        - Namespace: aws:elasticbeanstalk:environment:process:default
+          OptionName: MatcherHTTPCode
+          Value: '200'
+
+        # ALB Port 80 Listener (Plain HTTP for verification)
+        - Namespace: aws:elbv2:listener:default
+          OptionName: ListenerEnabled
+          Value: 'true'
+        - Namespace: aws:elbv2:listener:default
+          OptionName: Protocol
+          Value: HTTP
+
+
+        # Health-Based Rolling Update Policy
+        - Namespace: aws:autoscaling:updatepolicy:rollingupdate
+          OptionName: RollingUpdateEnabled
+          Value: 'true'
+        - Namespace: aws:autoscaling:updatepolicy:rollingupdate
+          OptionName: RollingUpdateType
+          Value: Health
+        - Namespace: aws:autoscaling:updatepolicy:rollingupdate
+          OptionName: MinInstancesInService
+          Value: '0'
+
+        # Rolling Deployments
+        - Namespace: aws:elasticbeanstalk:command
+          OptionName: DeploymentPolicy
+          Value: RollingWithAdditionalBatch
+
+        # Environment Variables for LiveKit Container
+        - Namespace: aws:elasticbeanstalk:application:environment
+          OptionName: SECRET_NAME
+          Value: !Sub "${EnvironmentName}/livekit-credentials"
+
+Outputs:
+  LiveKitEnvironmentUrl:
+    Description: LiveKit Server Environment URL (ALB Endpoint)
+    Value: !GetAtt LiveKitEnvironment.EndpointURL
+
+  LiveKitApplicationName:
+    Description: Elastic Beanstalk Application Name
+    Value: !Ref LiveKitApplication
+
+  LiveKitEnvironmentName:
+    Description: Elastic Beanstalk Environment Name
+    Value: !Ref LiveKitEnvironment
+
+  SecretsManagerSecretArn:
+    Description: AWS Secrets Manager Secret ARN
+    Value: !Ref LiveKitSecret
+
+  LiveKitSecurityGroupId:
+    Description: LiveKit EC2 WebRTC Security Group ID
+    Value: !Ref LiveKitSecurityGroup
