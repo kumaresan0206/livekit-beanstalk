@@ -10,11 +10,10 @@ phases:
       - test -f livekit.yaml
       - test -d .ebextensions
       - chmod +x entrypoint.sh
-      - echo "Configuration integrity validation succeeded."
   build:
     commands:
       - echo "Packaging LiveKit deployment artifacts..."
-      - echo "Commit ID: ${CODEBUILD_RESOLVED_SOURCE_VERSION:-manual}"
+      - echo "Build completed successfully."
 
 artifacts:
   files:
