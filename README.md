@@ -11,7 +11,7 @@ flowchart LR
     CF["1. CloudFormation\n(template.yaml)"] -->|"Provisions Infrastructure\n(IAM, Secrets, ALB, WebRTC SG, 1-Instance ASG)"| AWS_Infra["AWS Infrastructure"]
     CICD["2. AWS CodePipeline\n(pipeline.yaml & buildspec.yml)"] -->|"Pulls GitHub, Builds\n& Packages Artifacts"| EB["3. Elastic Beanstalk\n(Platform Orchestrator)"]
     EB -->|"Launches EC2 &\nRuns Docker (Host Net)"| Entrypoint["4. entrypoint.sh\n(Container Runtime)"]
-    Entrypoint -->|"Fetches Keys from Secrets Manager\n& Starts LiveKit"| LK["LiveKit Server"]
+    Entrypoint -->|"Fetches Keys from Secrets Manager\n& Starts LiveKit"| LK["LiveKit Server"] 
 ```
 
 1. **CloudFormation Infrastructure ([`template.yaml`](template.yaml))**: Single authoritative source of truth for all infrastructure:
