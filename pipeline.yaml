@@ -129,6 +129,7 @@ Resources:
                   - s3:ListBucket*
                   - s3:GetObject*
                   - s3:PutObject*
+                  - s3:DeleteObject*
                 Resource:
                   - !Sub "arn:aws:s3:::${PipelineArtifactBucket}"
                   - !Sub "arn:aws:s3:::${PipelineArtifactBucket}/*"
@@ -148,17 +149,21 @@ Resources:
                   - codebuild:StartBuild
                   - codebuild:StopBuild
                 Resource: !GetAtt LiveKitCodeBuildProject.Arn
-              # Elastic Beanstalk & Underlying CloudFormation Permissions
+              # Elastic Beanstalk, CloudFormation & AutoScaling Deploy Permissions
               - Effect: Allow
                 Action:
                   - elasticbeanstalk:*
                   - ec2:Describe*
                   - autoscaling:Describe*
+                  - autoscaling:UpdateAutoScalingGroup
+                  - autoscaling:SuspendProcesses
+                  - autoscaling:ResumeProcesses
                   - cloudformation:Describe*
                   - cloudformation:Get*
                   - cloudformation:List*
                   - cloudformation:ValidateTemplate
                   - cloudformation:UpdateStack
+                  - cloudformation:CancelUpdateStack
                   - cloudformation:CreateChangeSet
                   - cloudformation:ExecuteChangeSet
                   - cloudformation:DeleteChangeSet
