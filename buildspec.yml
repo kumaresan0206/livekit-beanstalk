@@ -3,12 +3,12 @@ version: 0.2
 phases:
   pre_build:
     commands:
-      - echo ">> Step 1/2: Validating script permissions and deployment files..."
+      - echo Validating script permissions and deployment files
       - chmod +x entrypoint.sh
   build:
     commands:
-      - echo ">> Step 2/2: Packaging LiveKit deployment artifacts for Elastic Beanstalk..."
-      - echo "Packaging completed successfully."
+      - echo Packaging LiveKit deployment bundle for Elastic Beanstalk
+      - echo Packaging completed successfully
 
 artifacts:
   files:

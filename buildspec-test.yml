@@ -3,6 +3,6 @@ version: 0.2
 phases:
   build:
     commands:
-      - echo ">> Executing LiveKit Node.js WebRTC Unit Test Suite..."
+      - echo Executing LiveKit Node.js WebRTC Unit Test Suite
       - node --test tests/configuration.test.js
-      - echo ">> All Node.js Unit Tests Passed Successfully."
+      - echo Unit tests completed successfully
