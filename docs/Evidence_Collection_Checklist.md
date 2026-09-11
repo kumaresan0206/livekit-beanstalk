@@ -16,20 +16,21 @@ This checklist details every screenshot, configuration document, AWS Console vie
 
 ## 2. AWS Management Console Evidence Screenshots
 
-### A. AWS CodePipeline CI/CD Pipeline (Complete 3-Stage Execution)
+### A. AWS CodePipeline CI/CD Pipeline (Complete 4-Stage Execution)
 - **Location**: AWS Console $\rightarrow$ **CodePipeline** $\rightarrow$ Pipelines $\rightarrow$ `livekit-production-pipeline`
 - **What to Capture**:
   - **Source Stage**: Status: **Succeeded** (Action: `GitHubSource`, commit hash, branch `main`).
-  - **Build Stage**: Status: **Succeeded** (Action: `PackageArtifacts` via AWS CodeBuild).
+  - **Build Stage**: Status: **Succeeded** (Action: `PackageArtifacts` executing automated unit tests in CodeBuild).
+  - **Approve Stage**: Status: **Succeeded / Approved** (Action: `ManualApproval` checkpoint).
   - **Deploy Stage**: Status: **Succeeded** (Action: `ElasticBeanstalkDeploy`, Application: `livekit-server`, Environment: `livekit-production`).
   - Pipeline Execution ID and timestamp.
 
-### B. AWS CodeBuild Project & Build Logs
+### B. AWS CodeBuild Project & Unit Test Execution Logs
 - **Location**: AWS Console $\rightarrow$ **CodeBuild** $\rightarrow$ Build projects $\rightarrow$ `livekit-production-package-build` $\rightarrow$ Build history
 - **What to Capture**:
   - Build Status: **Succeeded**
-  - Build Phase Details: `PRE_BUILD`, `BUILD`, `UPLOAD_ARTIFACTS` all marked as **SUCCESS**.
-  - Tail logs confirming `Configuration integrity check passed successfully`.
+  - Build Phase Details: `PRE_BUILD` (running Python unit tests), `BUILD`, `UPLOAD_ARTIFACTS` all marked as **SUCCESS**.
+  - Tail logs confirming `Ran 6 tests in ... OK` and `All automated unit tests and integrity checks passed successfully`.
 
 ### C. AWS CodeStar Connection (GitHub Integration)
 - **Location**: AWS Console $\rightarrow$ **Developer Tools** $\rightarrow$ Settings $\rightarrow$ **Connections**

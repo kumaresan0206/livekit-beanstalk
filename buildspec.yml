@@ -3,17 +3,12 @@ version: 0.2
 phases:
   pre_build:
     commands:
-      - echo "Validating LiveKit configuration and deployment files..."
-      - test -f Dockerfile
-      - test -f docker-compose.yml
-      - test -f entrypoint.sh
-      - test -f livekit.yaml
-      - test -d .ebextensions
+      - echo ">> Step 1/2: Validating script permissions and deployment files..."
       - chmod +x entrypoint.sh
   build:
     commands:
-      - echo "Packaging LiveKit deployment artifacts..."
-      - echo "Build completed successfully."
+      - echo ">> Step 2/2: Packaging LiveKit deployment artifacts for Elastic Beanstalk..."
+      - echo "Packaging completed successfully."
 
 artifacts:
   files:

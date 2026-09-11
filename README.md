@@ -9,7 +9,7 @@ This repository provides the complete Infrastructure as Code (IaC), AWS CodePipe
 ```mermaid
 flowchart LR
     CF["1. CloudFormation\n(template.yaml)"] -->|"Provisions Infrastructure\n(IAM, Secrets, ALB, WebRTC SG, 1-Instance ASG)"| AWS_Infra["AWS Infrastructure"]
-    CICD["2. AWS CodePipeline\n(pipeline.yaml & buildspec.yml)"] -->|"Pulls GitHub, Builds\n& Packages Artifacts"| EB["3. Elastic Beanstalk\n(Platform Orchestrator)"]
+    CICD["2. AWS CodePipeline\n(pipeline.yaml & buildspec.yml)"] -->|"Pulls GitHub, Tests, Builds\n& Packages Artifacts"| EB["3. Elastic Beanstalk\n(Platform Orchestrator)"]
     EB -->|"Launches EC2 &\nRuns Docker (Host Net)"| Entrypoint["4. entrypoint.sh\n(Container Runtime)"]
     Entrypoint -->|"Fetches Keys from Secrets Manager\n& Starts LiveKit"| LK["LiveKit Server"] 
 ```
@@ -21,10 +21,12 @@ flowchart LR
    - Elastic Beanstalk Application & Environment with explicit **Application Load Balancer (ALB)**, Port 80 & 443 (HTTPS/WSS) listeners, and public IP allocation (`AssociatePublicIpAddress: 'true'`).
    - Standalone Capacity (`Min: 1, Max: 1`) eliminating Redis cluster dependencies.
    - Health-based rolling update policies with additional batch (`RollingWithAdditionalBatch`).
-2. **AWS-Native CI/CD Pipeline ([`pipeline.yaml`](pipeline.yaml) & [`buildspec.yml`](buildspec.yml))**:
-   - **Source**: Automated GitHub integration via **AWS CodeStar Connections** (v2 GitHub OAuth connection).
-   - **Build**: **AWS CodeBuild** executes `buildspec.yml` to validate configuration integrity and package runtime artifacts into an encrypted S3 artifact store.
-   - **Deploy**: AWS CodePipeline triggers rolling deployments directly to the Elastic Beanstalk environment.
+2. **AWS-Native 5-Stage CI/CD Pipeline ([`pipeline.yaml`](pipeline.yaml), [`buildspec-test.yml`](buildspec-test.yml), [`buildspec.yml`](buildspec.yml) & [`tests/`](tests/))**:
+   - **Stage 1 (Source)**: Automated GitHub integration via **AWS CodeStar Connections** (v2 GitHub OAuth connection).
+   - **Stage 2 (Test)**: **AWS CodeBuild Test Project** executes automated **Node.js** unit tests ([`tests/configuration.test.js`](tests/configuration.test.js)) validating required deployment files, WebRTC port allocations (7880, 7881, 50000-60000), host networking mode, entrypoint fail-closed secret retrieval, CloudFormation structure, and sysctl UDP buffer tuning.
+   - **Stage 3 (Build)**: **AWS CodeBuild Package Project** validates file permissions and packages deployment bundle artifacts.
+   - **Stage 4 (Approve)**: **Manual Approval** checkpoint allowing operators to review test results and approve production release.
+   - **Stage 5 (Deploy)**: AWS CodePipeline triggers health-based rolling deployments to the Elastic Beanstalk environment.
 3. **Elastic Beanstalk Platform**: Provisions the EC2 instance (`t3.medium` cost-effective baseline / `c6i.large` production), executes the container using **Docker Host Networking** (`network_mode: "host"`), monitors health on `/` (Port 7880), and executes rolling deployments.
 4. **`entrypoint.sh` Container Runtime ([`entrypoint.sh`](entrypoint.sh))**: Runs on boot, retrieves credentials securely from **AWS Secrets Manager** with fail-closed error handling, dynamically generates runtime configuration in memory (`/tmp/livekit-runtime.yaml`), and launches `livekit-server`.
 
@@ -36,12 +38,15 @@ flowchart LR
 .
 ├── template.yaml                  # Core CloudFormation template (ALB, WebRTC SG, IAM, Secrets, EB Env)
 ├── pipeline.yaml                  # CI/CD CloudFormation template (AWS CodePipeline, CodeBuild, S3, IAM)
-├── buildspec.yml                  # AWS CodeBuild build & artifact packaging specification
+├── buildspec-test.yml             # AWS CodeBuild test specification (Node.js unit tests)
+├── buildspec.yml                  # AWS CodeBuild packaging specification
 ├── deploy.sh                      # Deployment coordinator script (CLI fallback & local zip packaging)
 ├── Dockerfile                     # Multi-stage Docker image with pinned LiveKit v1.8.3
 ├── docker-compose.yml             # Host networking container orchestration
 ├── entrypoint.sh                 # Fail-closed Secrets Manager secret loader & launcher
 ├── livekit.yaml                  # LiveKit base config with STUN external IP discovery
+├── tests/
+│   └── configuration.test.js     # Native Node.js unit test suite (node:test & node:assert)
 ├── .ebextensions/
 │   └── 01_sysctl_tuning.config   # Linux kernel UDP buffer and socket limits tuning
 ├── diagram/
@@ -79,15 +84,26 @@ aws cloudformation deploy \
 3. Click **Update pending connection** and complete the OAuth authorization to your GitHub repository `kumaresan0206/livekit-beanstalk`.
 4. The connection status will transition to **Available**.
 
-#### Step 3: Automated Execution
+#### Step 3: Automated 5-Stage Execution
 Every `git push` to `main` will automatically trigger **AWS CodePipeline**:
-1. **Source**: Pulls the latest commit from GitHub.
-2. **Build**: CodeBuild validates configs and packages the bundle via `buildspec.yml`.
-3. **Deploy**: Deploys the new application version to `livekit-production` with rolling updates.
+1. **Source**: Pulls latest commit from GitHub.
+2. **Test**: Executes `node --test tests/configuration.test.js` via CodeBuild.
+3. **Build**: Packages artifacts via `buildspec.yml`.
+4. **Approve**: Pauses for manual sign-off in the CodePipeline console.
+5. **Deploy**: Deploys rolling update to Elastic Beanstalk `livekit-production`.
 
 ---
 
-### 2. Manual CLI Deployment via Coordinator Script (Fallback)
+### 2. Running Unit Tests Locally
+
+```bash
+# Execute native Node.js unit test suite
+node --test tests/configuration.test.js
+```
+
+---
+
+### 3. Manual CLI Deployment via Coordinator Script (Fallback)
 
 ```bash
 chmod +x deploy.sh

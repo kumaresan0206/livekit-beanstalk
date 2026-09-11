@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Production AWS CodePipeline & CodeBuild CI/CD Stack for LiveKit WebRTC Server on Elastic Beanstalk.
+Description: Production AWS CodePipeline & CodeBuild CI/CD Stack for LiveKit WebRTC Server on Elastic Beanstalk with dedicated Test Stage.
 
 Parameters:
   GitHubRepo:
@@ -157,13 +157,15 @@ Resources:
                   - codestar-connections:UseConnection
                 Resource: !GetAtt GitHubConnection.ConnectionArn
 
-              # 3. AWS CodeBuild Trigger Permissions
+              # 3. AWS CodeBuild Trigger Permissions (Test & Build Projects)
               - Effect: Allow
                 Action:
                   - codebuild:BatchGetBuilds
                   - codebuild:StartBuild
                   - codebuild:StopBuild
-                Resource: !GetAtt LiveKitCodeBuildProject.Arn
+                Resource:
+                  - !GetAtt LiveKitCodeBuildTestProject.Arn
+                  - !GetAtt LiveKitCodeBuildProject.Arn
 
               # 4. Elastic Beanstalk Application & Environment Deployment Permissions
               - Effect: Allow
@@ -248,13 +250,31 @@ Resources:
                 Resource: "*"
 
   # ----------------------------------------------------------------------
-  # 4. AWS CodeBuild Project
+  # 4. AWS CodeBuild Projects (Test & Build)
   # ----------------------------------------------------------------------
+  LiveKitCodeBuildTestProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub "${EBEnvironmentName}-unit-test"
+      Description: Executes automated Node.js WebRTC unit tests for LiveKit
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:5.0
+        ImagePullCredentialsType: CODEBUILD
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: buildspec-test.yml
+      TimeoutInMinutes: 10
+
   LiveKitCodeBuildProject:
     Type: AWS::CodeBuild::Project
     Properties:
       Name: !Sub "${EBEnvironmentName}-package-build"
-      Description: Validates and packages LiveKit deployment artifacts for Elastic Beanstalk
+      Description: Packages LiveKit deployment artifacts for Elastic Beanstalk
       ServiceRole: !GetAtt CodeBuildServiceRole.Arn
       Artifacts:
         Type: CODEPIPELINE
@@ -269,7 +289,7 @@ Resources:
       TimeoutInMinutes: 15
 
   # ----------------------------------------------------------------------
-  # 5. AWS CodePipeline (V2 Pipeline)
+  # 5. AWS CodePipeline (V2 Pipeline: Source -> Test -> Build -> Approve -> Deploy)
   # ----------------------------------------------------------------------
   LiveKitPipeline:
     Type: AWS::CodePipeline::Pipeline
@@ -300,7 +320,22 @@ Resources:
                 - Name: SourceArtifact
               RunOrder: 1
 
-        # Stage 2: CodeBuild Package & Validation
+        # Stage 2: Automated Node.js Unit Testing Stage
+        - Name: Test
+          Actions:
+            - Name: ExecuteUnitTests
+              ActionTypeId:
+                Category: Test
+                Owner: AWS
+                Provider: CodeBuild
+                Version: '1'
+              Configuration:
+                ProjectName: !Ref LiveKitCodeBuildTestProject
+              InputArtifacts:
+                - Name: SourceArtifact
+              RunOrder: 1
+
+        # Stage 3: Packaging & Artifact Generation Stage
         - Name: Build
           Actions:
             - Name: PackageArtifacts
@@ -317,7 +352,20 @@ Resources:
                 - Name: BuildArtifact
               RunOrder: 1
 
-        # Stage 3: Rolling Deploy to Elastic Beanstalk
+        # Stage 4: Manual Approval Checkpoint
+        - Name: Approve
+          Actions:
+            - Name: ManualApproval
+              ActionTypeId:
+                Category: Approval
+                Owner: AWS
+                Provider: Manual
+                Version: '1'
+              Configuration:
+                CustomData: "Please review unit test results and approve deployment to livekit-production environment."
+              RunOrder: 1
+
+        # Stage 5: Rolling Deploy to Elastic Beanstalk
         - Name: Deploy
           Actions:
             - Name: ElasticBeanstalkDeploy
