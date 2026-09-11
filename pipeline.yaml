@@ -158,16 +158,20 @@ Resources:
                   - codebuild:StartBuild
                   - codebuild:StopBuild
                 Resource: !GetAtt LiveKitCodeBuildProject.Arn
-              # Elastic Beanstalk Deployment Permissions
+              # Elastic Beanstalk & Underlying CloudFormation Permissions
               - Effect: Allow
                 Action:
-                  - elasticbeanstalk:CreateApplicationVersion
-                  - elasticbeanstalk:DescribeApplicationVersions
-                  - elasticbeanstalk:DescribeApplications
-                  - elasticbeanstalk:DescribeEnvironments
-                  - elasticbeanstalk:DescribeEvents
-                  - elasticbeanstalk:UpdateEnvironment
-                  - elasticbeanstalk:CreateStorageLocation
+                  - elasticbeanstalk:*
+                  - ec2:Describe*
+                  - autoscaling:Describe*
+                  - cloudformation:Describe*
+                  - cloudformation:Get*
+                  - cloudformation:List*
+                  - cloudformation:ValidateTemplate
+                  - cloudformation:UpdateStack
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:DeleteChangeSet
                 Resource: "*"
 
   # ----------------------------------------------------------------------
