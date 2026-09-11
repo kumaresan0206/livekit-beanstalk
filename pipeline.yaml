@@ -165,8 +165,10 @@ Resources:
                   - cloudformation:CancelUpdateStack
                   - cloudformation:DescribeStacks
                   - cloudformation:DescribeStackEvents
+                  - cloudformation:DescribeStackResource
                   - cloudformation:DescribeStackResources
                   - cloudformation:GetTemplate
+                  - cloudformation:GetTemplateSummary
                   - cloudformation:UpdateStack
 
                   # Auto Scaling - EB instance management
