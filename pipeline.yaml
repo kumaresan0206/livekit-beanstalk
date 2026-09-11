@@ -149,24 +149,42 @@ Resources:
                   - codebuild:StartBuild
                   - codebuild:StopBuild
                 Resource: !GetAtt LiveKitCodeBuildProject.Arn
-              # Elastic Beanstalk, CloudFormation & AutoScaling Deploy Permissions
+              # Elastic Beanstalk, ELB, AutoScaling & CloudFormation Deploy Permissions
               - Effect: Allow
                 Action:
-                  - elasticbeanstalk:*
-                  - ec2:Describe*
-                  - autoscaling:Describe*
+                  # Elastic Beanstalk
+                  - elasticbeanstalk:CreateApplicationVersion
+                  - elasticbeanstalk:DescribeApplicationVersions
+                  - elasticbeanstalk:DescribeApplications
+                  - elasticbeanstalk:DescribeEnvironments
+                  - elasticbeanstalk:DescribeEvents
+                  - elasticbeanstalk:UpdateEnvironment
+                  - elasticbeanstalk:CreateStorageLocation
+
+                  # CloudFormation - EB underlying stack
+                  - cloudformation:CancelUpdateStack
+                  - cloudformation:DescribeStacks
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:DescribeStackResources
+                  - cloudformation:GetTemplate
+                  - cloudformation:UpdateStack
+
+                  # Auto Scaling - EB instance management
                   - autoscaling:UpdateAutoScalingGroup
+                  - autoscaling:DescribeAutoScalingGroups
+                  - autoscaling:TerminateInstanceInAutoScalingGroup
                   - autoscaling:SuspendProcesses
                   - autoscaling:ResumeProcesses
-                  - cloudformation:Describe*
-                  - cloudformation:Get*
-                  - cloudformation:List*
-                  - cloudformation:ValidateTemplate
-                  - cloudformation:UpdateStack
-                  - cloudformation:CancelUpdateStack
-                  - cloudformation:CreateChangeSet
-                  - cloudformation:ExecuteChangeSet
-                  - cloudformation:DeleteChangeSet
+
+                  # Load Balancer health verification
+                  - elasticloadbalancing:DescribeTargetHealth
+                  - elasticloadbalancing:DescribeTargetGroups
+                  - elasticloadbalancing:DescribeLoadBalancers
+
+                  # EC2 description
+                  - ec2:DescribeInstances
+                  - ec2:DescribeSecurityGroups
+                  - ec2:DescribeSubnets
                 Resource: "*"
 
   # ----------------------------------------------------------------------
