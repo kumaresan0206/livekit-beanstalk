@@ -1,24 +1,19 @@
 version: 0.2
 
 phases:
-  install:
-    commands:
-      - echo ">> Phase 1: Initializing CodeBuild environment..."
-
   pre_build:
     commands:
-      - echo ">> Phase 2: Validating LiveKit deployment files and configuration..."
-      - test -f Dockerfile || (echo "FATAL: Dockerfile is missing!" && exit 1)
-      - test -f docker-compose.yml || (echo "FATAL: docker-compose.yml is missing!" && exit 1)
-      - test -f entrypoint.sh || (echo "FATAL: entrypoint.sh is missing!" && exit 1)
-      - test -f livekit.yaml || (echo "FATAL: livekit.yaml is missing!" && exit 1)
-      - test -d .ebextensions || (echo "FATAL: .ebextensions directory is missing!" && exit 1)
+      - echo "Validating LiveKit configuration and deployment files..."
+      - test -f Dockerfile
+      - test -f docker-compose.yml
+      - test -f entrypoint.sh
+      - test -f livekit.yaml
+      - test -d .ebextensions
       - chmod +x entrypoint.sh
-      - echo "Configuration integrity check passed successfully."
-
+      - echo "Configuration integrity validation succeeded."
   build:
     commands:
-      - echo ">> Phase 3: Packaging LiveKit Elastic Beanstalk deployment artifacts..."
+      - echo "Packaging LiveKit deployment artifacts..."
       - echo "Commit ID: ${CODEBUILD_RESOLVED_SOURCE_VERSION:-manual}"
 
 artifacts:
@@ -27,5 +22,5 @@ artifacts:
     - docker-compose.yml
     - entrypoint.sh
     - livekit.yaml
-    - '.ebextensions/**/*'
+    - .ebextensions/**/*
   discard-paths: no
