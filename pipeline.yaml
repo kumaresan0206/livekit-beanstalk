@@ -135,13 +135,17 @@ Resources:
               # Elastic Beanstalk S3 Storage Bucket Permissions
               - Effect: Allow
                 Action:
+                  - s3:CreateBucket
+                  - s3:GetBucketLocation
+                  - s3:ListBucket
                   - s3:GetObject
+                  - s3:GetObjectVersion
                   - s3:PutObject
                   - s3:PutObjectAcl
-                  - s3:ListBucket
                 Resource:
                   - !Sub "arn:aws:s3:::elasticbeanstalk-${AWS::Region}-${AWS::AccountId}"
                   - !Sub "arn:aws:s3:::elasticbeanstalk-${AWS::Region}-${AWS::AccountId}/*"
+                  - "arn:aws:s3:::elasticbeanstalk-*"
               # CodeStar Connections Permissions
               - Effect: Allow
                 Action:
