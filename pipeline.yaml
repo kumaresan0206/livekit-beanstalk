@@ -183,10 +183,14 @@ Resources:
                   - elasticloadbalancing:DescribeTargetGroups
                   - elasticloadbalancing:DescribeLoadBalancers
 
-                  # EC2 description
+                  # EC2 description & launch template / image inspection
                   - ec2:DescribeInstances
                   - ec2:DescribeSecurityGroups
                   - ec2:DescribeSubnets
+                  - ec2:DescribeLaunchTemplates
+                  - ec2:DescribeImages
+                  - ec2:DescribeVpcs
+                  - ec2:DescribeAvailabilityZones
                 Resource: "*"
 
   # ----------------------------------------------------------------------
