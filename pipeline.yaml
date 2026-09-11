@@ -1,0 +1,274 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Production AWS CodePipeline & CodeBuild CI/CD Stack for LiveKit WebRTC Server on Elastic Beanstalk.
+
+Parameters:
+  GitHubRepo:
+    Type: String
+    Default: "kumaresan0206/livekit-beanstalk"
+    Description: Full GitHub repository name in format <owner>/<repo>
+
+  GitHubBranch:
+    Type: String
+    Default: "main"
+    Description: GitHub branch to monitor for automated pipeline triggers
+
+  EBApplicationName:
+    Type: String
+    Default: "livekit-server"
+    Description: Target Elastic Beanstalk Application Name
+
+  EBEnvironmentName:
+    Type: String
+    Default: "livekit-production"
+    Description: Target Elastic Beanstalk Environment Name
+
+Resources:
+  # ----------------------------------------------------------------------
+  # 1. GitHub CodeStar Connection (Secure V2 GitHub OAuth Integration)
+  # ----------------------------------------------------------------------
+  GitHubConnection:
+    Type: AWS::CodeStarConnections::Connection
+    Properties:
+      ConnectionName: !Sub "${EBEnvironmentName}-github-conn"
+      ProviderType: GitHub
+
+  # ----------------------------------------------------------------------
+  # 2. Encrypted Artifact Store (S3 Bucket & Strict Bucket Policy)
+  # ----------------------------------------------------------------------
+  PipelineArtifactBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "livekit-pipeline-artifacts-${AWS::AccountId}-${AWS::Region}"
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+
+  PipelineArtifactBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref PipelineArtifactBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: EnforceSecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !Sub "arn:aws:s3:::${PipelineArtifactBucket}"
+              - !Sub "arn:aws:s3:::${PipelineArtifactBucket}/*"
+            Condition:
+              Bool:
+                'aws:SecureTransport': 'false'
+
+  # ----------------------------------------------------------------------
+  # 3. IAM Roles & Scoped Permissions
+  # ----------------------------------------------------------------------
+  CodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${EBEnvironmentName}-codebuild-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CodeBuildBasePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/*"
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:PutObject
+                  - s3:GetBucketAcl
+                  - s3:GetBucketLocation
+                Resource:
+                  - !Sub "arn:aws:s3:::${PipelineArtifactBucket}"
+                  - !Sub "arn:aws:s3:::${PipelineArtifactBucket}/*"
+
+  CodePipelineServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${EBEnvironmentName}-codepipeline-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CodePipelineServicePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Artifact Bucket Permissions
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:GetBucketVersioning
+                  - s3:PutObject
+                  - s3:PutObjectAcl
+                Resource:
+                  - !Sub "arn:aws:s3:::${PipelineArtifactBucket}"
+                  - !Sub "arn:aws:s3:::${PipelineArtifactBucket}/*"
+              # Elastic Beanstalk S3 Storage Bucket Permissions
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:PutObjectAcl
+                  - s3:ListBucket
+                Resource:
+                  - !Sub "arn:aws:s3:::elasticbeanstalk-${AWS::Region}-${AWS::AccountId}"
+                  - !Sub "arn:aws:s3:::elasticbeanstalk-${AWS::Region}-${AWS::AccountId}/*"
+              # CodeStar Connections Permissions
+              - Effect: Allow
+                Action:
+                  - codestar-connections:UseConnection
+                Resource: !GetAtt GitHubConnection.ConnectionArn
+              # CodeBuild Trigger Permissions
+              - Effect: Allow
+                Action:
+                  - codebuild:BatchGetBuilds
+                  - codebuild:StartBuild
+                  - codebuild:StopBuild
+                Resource: !GetAtt LiveKitCodeBuildProject.Arn
+              # Elastic Beanstalk Deployment Permissions
+              - Effect: Allow
+                Action:
+                  - elasticbeanstalk:CreateApplicationVersion
+                  - elasticbeanstalk:DescribeApplicationVersions
+                  - elasticbeanstalk:DescribeApplications
+                  - elasticbeanstalk:DescribeEnvironments
+                  - elasticbeanstalk:DescribeEvents
+                  - elasticbeanstalk:UpdateEnvironment
+                  - elasticbeanstalk:CreateStorageLocation
+                Resource: "*"
+
+  # ----------------------------------------------------------------------
+  # 4. AWS CodeBuild Project
+  # ----------------------------------------------------------------------
+  LiveKitCodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub "${EBEnvironmentName}-package-build"
+      Description: Validates and packages LiveKit deployment artifacts for Elastic Beanstalk
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:5.0
+        ImagePullCredentialsType: CODEBUILD
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: buildspec.yml
+      TimeoutInMinutes: 15
+
+  # ----------------------------------------------------------------------
+  # 5. AWS CodePipeline (V2 Pipeline)
+  # ----------------------------------------------------------------------
+  LiveKitPipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Sub "${EBEnvironmentName}-pipeline"
+      PipelineType: V2
+      RoleArn: !GetAtt CodePipelineServiceRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref PipelineArtifactBucket
+      Stages:
+        # Stage 1: Pull from GitHub via CodeStar Connection
+        - Name: Source
+          Actions:
+            - Name: GitHubSource
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeStarSourceConnection
+                Version: '1'
+              Configuration:
+                ConnectionArn: !GetAtt GitHubConnection.ConnectionArn
+                FullRepositoryId: !Ref GitHubRepo
+                BranchName: !Ref GitHubBranch
+                OutputArtifactFormat: CODE_ZIP
+                DetectChanges: true
+              OutputArtifacts:
+                - Name: SourceArtifact
+              RunOrder: 1
+
+        # Stage 2: CodeBuild Package & Validation
+        - Name: Build
+          Actions:
+            - Name: PackageArtifacts
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: '1'
+              Configuration:
+                ProjectName: !Ref LiveKitCodeBuildProject
+              InputArtifacts:
+                - Name: SourceArtifact
+              OutputArtifacts:
+                - Name: BuildArtifact
+              RunOrder: 1
+
+        # Stage 3: Rolling Deploy to Elastic Beanstalk
+        - Name: Deploy
+          Actions:
+            - Name: ElasticBeanstalkDeploy
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: ElasticBeanstalk
+                Version: '1'
+              Configuration:
+                ApplicationName: !Ref EBApplicationName
+                EnvironmentName: !Ref EBEnvironmentName
+              InputArtifacts:
+                - Name: BuildArtifact
+              RunOrder: 1
+
+Outputs:
+  PipelineName:
+    Description: AWS CodePipeline Name
+    Value: !Ref LiveKitPipeline
+
+  PipelineUrl:
+    Description: Direct URL to AWS CodePipeline Console
+    Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/codesuite/codepipeline/pipelines/${LiveKitPipeline}/view?region=${AWS::Region}"
+
+  ConnectionArn:
+    Description: AWS CodeStar GitHub Connection ARN (Requires 1-time activation in AWS Console)
+    Value: !GetAtt GitHubConnection.ConnectionArn
+
+  ConnectionStatus:
+    Description: Status of GitHub Connection
+    Value: !GetAtt GitHubConnection.ConnectionStatus
+
+  ArtifactBucketName:
+    Description: S3 Bucket storing pipeline artifacts
+    Value: !Ref PipelineArtifactBucket

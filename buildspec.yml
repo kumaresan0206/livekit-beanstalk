@@ -1,0 +1,35 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.11
+    commands:
+      - echo ">> Phase 1: Installing build environment tools..."
+      - pip install --upgrade pip
+
+  pre_build:
+    commands:
+      - echo ">> Phase 2: Validating LiveKit deployment files and configuration..."
+      - test -f Dockerfile || { echo "FATAL: Dockerfile is missing!"; exit 1; }
+      - test -f docker-compose.yml || { echo "FATAL: docker-compose.yml is missing!"; exit 1; }
+      - test -f entrypoint.sh || { echo "FATAL: entrypoint.sh is missing!"; exit 1; }
+      - test -f livekit.yaml || { echo "FATAL: livekit.yaml is missing!"; exit 1; }
+      - test -d .ebextensions || { echo "FATAL: .ebextensions directory is missing!"; exit 1; }
+      - chmod +x entrypoint.sh
+      - echo "Configuration integrity check passed successfully."
+
+  build:
+    commands:
+      - echo ">> Phase 3: Packaging LiveKit Elastic Beanstalk deployment artifacts..."
+      - echo "Build execution timestamp: $(date)"
+      - echo "Commit ID: ${CODEBUILD_RESOLVED_SOURCE_VERSION:-manual}"
+
+artifacts:
+  files:
+    - Dockerfile
+    - docker-compose.yml
+    - entrypoint.sh
+    - livekit.yaml
+    - '.ebextensions/**/*'
+  discard-paths: no
