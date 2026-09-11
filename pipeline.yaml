@@ -121,31 +121,21 @@ Resources:
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-              # Artifact Bucket Permissions
-              - Effect: Allow
-                Action:
-                  - s3:GetObject
-                  - s3:GetObjectVersion
-                  - s3:GetBucketVersioning
-                  - s3:PutObject
-                  - s3:PutObjectAcl
-                Resource:
-                  - !Sub "arn:aws:s3:::${PipelineArtifactBucket}"
-                  - !Sub "arn:aws:s3:::${PipelineArtifactBucket}/*"
-              # Elastic Beanstalk S3 Storage Bucket Permissions
+              # Artifact Bucket & Elastic Beanstalk S3 Permissions
               - Effect: Allow
                 Action:
                   - s3:CreateBucket
-                  - s3:GetBucketLocation
-                  - s3:ListBucket
-                  - s3:GetObject
-                  - s3:GetObjectVersion
-                  - s3:PutObject
-                  - s3:PutObjectAcl
+                  - s3:GetBucket*
+                  - s3:ListBucket*
+                  - s3:GetObject*
+                  - s3:PutObject*
                 Resource:
+                  - !Sub "arn:aws:s3:::${PipelineArtifactBucket}"
+                  - !Sub "arn:aws:s3:::${PipelineArtifactBucket}/*"
                   - !Sub "arn:aws:s3:::elasticbeanstalk-${AWS::Region}-${AWS::AccountId}"
                   - !Sub "arn:aws:s3:::elasticbeanstalk-${AWS::Region}-${AWS::AccountId}/*"
                   - "arn:aws:s3:::elasticbeanstalk-*"
+                  - "arn:aws:s3:::elasticbeanstalk-*/*"
               # CodeStar Connections Permissions
               - Effect: Allow
                 Action:
