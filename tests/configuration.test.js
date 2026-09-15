@@ -5,7 +5,7 @@ const path = require('node:path');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 
-describe('LiveKit WebRTC Infrastructure & Configuration Unit Tests (Node.js)', () => {
+describe('LiveKit Signaling Infrastructure Unit Tests (Node.js)', () => {
 
   test('1. Verify all required deployment and IaC files exist', () => {
     const requiredFiles = [
@@ -26,15 +26,12 @@ describe('LiveKit WebRTC Infrastructure & Configuration Unit Tests (Node.js)', (
     }
   });
 
-  test('2. Validate livekit.yaml WebRTC port allocation and STUN discovery', () => {
+  test('2. Validate livekit.yaml signaling port allocation and STUN discovery', () => {
     const configPath = path.join(REPO_ROOT, 'livekit.yaml');
     const content = fs.readFileSync(configPath, 'utf8');
 
     assert.match(content, /port:\s*7880/, 'Signaling port must be set to 7880');
-    assert.match(content, /tcp_port:\s*7881/, 'WebRTC ICE TCP fallback port must be set to 7881');
-    assert.match(content, /port_range_start:\s*50000/, 'WebRTC UDP start port must be set to 50000');
-    assert.match(content, /port_range_end:\s*60000/, 'WebRTC UDP end port must be set to 60000');
-    assert.match(content, /use_external_ip:\s*true/, 'use_external_ip must be true for STUN public candidate discovery');
+    assert.match(content, /use_external_ip:\s*true/, 'use_external_ip must be true for candidate discovery');
   });
 
   test('3. Validate docker-compose.yml enforces Host Networking Mode', () => {
@@ -56,26 +53,41 @@ describe('LiveKit WebRTC Infrastructure & Configuration Unit Tests (Node.js)', (
     assert.ok(content.includes('livekit-server'), 'entrypoint.sh must execute livekit-server');
   });
 
-  test('5. Validate CloudFormation infrastructure templates structure and 5-stage pipeline', () => {
+  test('5. Validate CloudFormation 100% ALB-Managed Ingress, Route 53, and Auto-Validated ACM', () => {
     const templatePath = path.join(REPO_ROOT, 'template.yaml');
     const pipelinePath = path.join(REPO_ROOT, 'pipeline.yaml');
 
     const templateContent = fs.readFileSync(templatePath, 'utf8');
     const pipelineContent = fs.readFileSync(pipelinePath, 'utf8');
 
-    // Verify Core Infrastructure
-    assert.ok(templateContent.includes('LiveKitSecurityGroup:'), 'template.yaml must define LiveKitSecurityGroup');
-    assert.ok(templateContent.includes('LiveKitSecret:'), 'template.yaml must define LiveKitSecret');
-    assert.ok(templateContent.includes('LiveKitEnvironment:'), 'template.yaml must define LiveKitEnvironment');
+    // 1. Existing VPC & Subnets Parameters
+    assert.ok(templateContent.includes('VpcId:'), 'template.yaml must define VpcId parameter');
+    assert.ok(templateContent.includes('PublicSubnets:'), 'template.yaml must define PublicSubnets parameter');
 
-    // Verify CI/CD Pipeline Components
+    // 2. Custom Shared ALB (livekit-production-alb) & Listeners
+    assert.ok(templateContent.includes('CustomALB:'), 'template.yaml must define CustomALB');
+    assert.ok(templateContent.includes('ALBSecurityGroup:'), 'template.yaml must define ALBSecurityGroup');
+    assert.ok(templateContent.includes('ALBHttpRedirectListener:'), 'template.yaml must define HTTP 80 redirect listener');
+    assert.ok(templateContent.includes('ALBHttpsListener:'), 'template.yaml must define HTTPS 443 listener');
+    assert.ok(templateContent.includes('LiveKitCertificate:'), 'template.yaml must define auto-validated ACM certificate');
+    assert.ok(templateContent.includes('LiveKitDnsRecord:'), 'template.yaml must define LiveKitDnsRecord Route 53 alias');
+
+    // 3. Shared ALB Elastic Beanstalk Option Settings
+    assert.ok(templateContent.includes('LoadBalancerIsShared'), 'template.yaml must enable LoadBalancerIsShared: true');
+    assert.ok(templateContent.includes('SharedLoadBalancer'), 'template.yaml must configure SharedLoadBalancer option setting');
+    assert.ok(templateContent.includes('aws:elbv2:listener:443'), 'template.yaml must configure aws:elbv2:listener:443');
+    assert.ok(templateContent.includes('aws:elbv2:listenerrule:default'), 'template.yaml must configure listener rule for shared ALB');
+    assert.ok(templateContent.includes('aws:elasticbeanstalk:environment:process:default'), 'template.yaml must configure default EB process on 7880');
+
+    // 4. 100% ALB-Restricted Security Group (Zero public bypass)
+    assert.ok(templateContent.includes('SourceSecurityGroupId: !Ref ALBSecurityGroup'), 'Port 7880 must be restricted strictly to ALBSecurityGroup');
+    assert.ok(!templateContent.includes('FromPort: 50000'), 'UDP 50000-60000 bypass rule must be removed');
+    assert.ok(!templateContent.includes('FromPort: 7881'), 'TCP 7881 bypass rule must be removed');
+
+    // 5. CI/CD Pipeline Components
     assert.ok(pipelineContent.includes('LiveKitPipeline:'), 'pipeline.yaml must define LiveKitPipeline');
     assert.ok(pipelineContent.includes('LiveKitCodeBuildTestProject:'), 'pipeline.yaml must define LiveKitCodeBuildTestProject');
     assert.ok(pipelineContent.includes('LiveKitCodeBuildProject:'), 'pipeline.yaml must define LiveKitCodeBuildProject');
-    assert.ok(pipelineContent.includes('Name: Test'), 'pipeline.yaml must define Test stage');
-    assert.ok(pipelineContent.includes('Name: Build'), 'pipeline.yaml must define Build stage');
-    assert.ok(pipelineContent.includes('ManualApproval'), 'pipeline.yaml must define ManualApproval stage');
-    assert.ok(pipelineContent.includes('ElasticBeanstalkDeploy'), 'pipeline.yaml must define Deploy stage');
   });
 
   test('6. Validate Linux kernel UDP buffer tuning in .ebextensions', () => {

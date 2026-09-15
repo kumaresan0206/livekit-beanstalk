@@ -4,7 +4,9 @@ set -e
 # ==============================================================================
 # LiveKit Elastic Beanstalk Deployment Coordinator Script
 # ==============================================================================
-# 1-Instance Standalone Architecture (Cost-Optimized, No Redis Required)
+# Deploys LiveKit WebRTC Server on Elastic Beanstalk with Existing VPC,
+# Shared Custom ALB (livekit-production-alb), Auto-Validated ACM Certificate,
+# and Route 53 DNS for livekit.dev.blueshirt.work.
 # ==============================================================================
 
 # Default configuration variables
@@ -13,13 +15,25 @@ STACK_NAME="${STACK_NAME:-livekit-beanstalk-stack}"
 APP_NAME="${APP_NAME:-livekit-server}"
 ENV_NAME="${ENV_NAME:-livekit-production}"
 INSTANCE_TYPE="${INSTANCE_TYPE:-t3.medium}"
-MIN_INSTANCES="1"
-MAX_INSTANCES="1"
-CERTIFICATE_ARN="${CERTIFICATE_ARN:-}"
+MIN_INSTANCES="${MIN_INSTANCES:-1}"
+MAX_INSTANCES="${MAX_INSTANCES:-1}"
+DOMAIN_NAME="${DOMAIN_NAME:-livekit.dev.blueshirt.work}"
+HOSTED_ZONE_ID="${HOSTED_ZONE_ID:-}"
+VPC_ID="${VPC_ID:-}"
+PUBLIC_SUBNETS="${PUBLIC_SUBNETS:-}"
 
-TIMESTAMP=$(date +%Y%m%d%H%M%S)
-VERSION_LABEL="livekit-v${TIMESTAMP}"
-PACKAGE_NAME="livekit-deploy-${TIMESTAMP}.zip"
+# Parse optional command-line flags
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --vpc-id) VPC_ID="$2"; shift 2 ;;
+        --subnets) PUBLIC_SUBNETS="$2"; shift 2 ;;
+        --hosted-zone-id) HOSTED_ZONE_ID="$2"; shift 2 ;;
+        --domain-name) DOMAIN_NAME="$2"; shift 2 ;;
+        --stack-name) STACK_NAME="$2"; shift 2 ;;
+        --region) AWS_REGION="$2"; shift 2 ;;
+        *) echo "Unknown option: $1"; exit 1 ;;
+    esac
+done
 
 echo "=========================================================================="
 echo " Starting LiveKit Elastic Beanstalk Deployment Coordinator"
@@ -28,11 +42,31 @@ echo "AWS Region        : ${AWS_REGION}"
 echo "Stack Name        : ${STACK_NAME}"
 echo "Application Name  : ${APP_NAME}"
 echo "Environment Name  : ${ENV_NAME}"
+echo "Domain Name       : ${DOMAIN_NAME}"
+echo "Hosted Zone ID    : ${HOSTED_ZONE_ID:-Not provided}"
+echo "VPC ID            : ${VPC_ID:-Not provided}"
+echo "Public Subnets    : ${PUBLIC_SUBNETS:-Not provided}"
 echo "Instance Type     : ${INSTANCE_TYPE}"
-echo "Architecture      : 1-Instance Standalone (Min: ${MIN_INSTANCES}, Max: ${MAX_INSTANCES})"
-echo "Certificate ARN   : ${CERTIFICATE_ARN:-None (HTTP Only)}"
-echo "Version Label     : ${VERSION_LABEL}"
+echo "Architecture      : Standalone (Min: ${MIN_INSTANCES}, Max: ${MAX_INSTANCES})"
 echo "=========================================================================="
+
+# Validation for required networking parameters
+if [ -z "$VPC_ID" ] || [ -z "$PUBLIC_SUBNETS" ] || [ -z "$HOSTED_ZONE_ID" ]; then
+    echo ""
+    echo "ERROR: Missing required parameters."
+    echo "Please export environment variables or provide CLI flags:"
+    echo "  export VPC_ID='vpc-xxxxxxxx'"
+    echo "  export PUBLIC_SUBNETS='subnet-xxxxxxxx,subnet-yyyyyyyy'"
+    echo "  export HOSTED_ZONE_ID='Zxxxxxxxxxxxx'"
+    echo ""
+    echo "Usage via CLI flags:"
+    echo "  ./deploy.sh --vpc-id vpc-xxxxxxxx --subnets 'subnet-xxxx,subnet-yyyy' --hosted-zone-id Zxxxxxxxx"
+    exit 1
+fi
+
+TIMESTAMP=$(date +%Y%m%d%H%M%S)
+VERSION_LABEL="livekit-v${TIMESTAMP}"
+PACKAGE_NAME="livekit-deploy-${TIMESTAMP}.zip"
 
 # ------------------------------------------------------------------------------
 # Step 1: Deploy / Update Infrastructure via AWS CloudFormation
@@ -40,13 +74,20 @@ echo "==========================================================================
 echo ""
 echo ">> Step 1/4: Deploying / Updating Infrastructure via CloudFormation..."
 
-PARAMS="ApplicationName=${APP_NAME} EnvironmentName=${ENV_NAME} InstanceType=${INSTANCE_TYPE} MinInstances=${MIN_INSTANCES} MaxInstances=${MAX_INSTANCES}"
-
 aws cloudformation deploy \
     --template-file template.yaml \
     --stack-name "${STACK_NAME}" \
     --capabilities CAPABILITY_NAMED_IAM \
-    --parameter-overrides ${PARAMS} \
+    --parameter-overrides \
+        ApplicationName="${APP_NAME}" \
+        EnvironmentName="${ENV_NAME}" \
+        InstanceType="${INSTANCE_TYPE}" \
+        MinInstances="${MIN_INSTANCES}" \
+        MaxInstances="${MAX_INSTANCES}" \
+        VpcId="${VPC_ID}" \
+        PublicSubnets="${PUBLIC_SUBNETS}" \
+        HostedZoneId="${HOSTED_ZONE_ID}" \
+        DomainName="${DOMAIN_NAME}" \
     --region "${AWS_REGION}"
 
 # ------------------------------------------------------------------------------
@@ -54,19 +95,6 @@ aws cloudformation deploy \
 # ------------------------------------------------------------------------------
 echo ""
 echo ">> Step 2/4: Packaging application deployment bundle (${PACKAGE_NAME})..."
-
-# Configure HTTPS listener via .ebextensions if certificate ARN is provided
-if [ -n "$CERTIFICATE_ARN" ]; then
-    echo "Configuring HTTPS/WSS (Port 443) listener with certificate: ${CERTIFICATE_ARN}"
-    cat <<EOF > .ebextensions/02_https.config
-option_settings:
-  aws:elbv2:listener:443:
-    ListenerEnabled: 'true'
-    Protocol: HTTPS
-    SSLCertificateArns: ${CERTIFICATE_ARN}
-    DefaultProcess: default
-EOF
-fi
 
 if command -v zip >/dev/null 2>&1; then
     zip -q -r "${PACKAGE_NAME}" \
@@ -93,9 +121,6 @@ else
     echo "ERROR: Neither 'zip' nor 'python3' is installed to package the application."
     exit 1
 fi
-
-# Clean up temporary https configuration file if created
-rm -f .ebextensions/02_https.config
 
 echo "Bundle created successfully: ${PACKAGE_NAME}"
 
@@ -134,6 +159,7 @@ aws elasticbeanstalk update-environment \
 echo ""
 echo "=========================================================================="
 echo " Deployment successfully submitted!"
+echo " URL: https://${DOMAIN_NAME}"
 echo " Elastic Beanstalk is performing rolling updates."
 echo " Container entrypoint.sh will load Secrets Manager keys on boot."
 echo "=========================================================================="

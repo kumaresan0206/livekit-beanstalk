@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Production CloudFormation Template for Standalone LiveKit WebRTC Server on AWS Elastic Beanstalk (1-Instance Architecture with Explicit Security Groups).
+Description: Production CloudFormation Template for LiveKit Signaling Server on AWS Elastic Beanstalk with Existing VPC, Shared Custom ALB (livekit-production-alb), Auto-Validated ACM Certificate, and 100% ALB-Managed Ingress.
 
 Parameters:
   ApplicationName:
@@ -28,63 +28,169 @@ Parameters:
       - c6i.large
       - c6i.xlarge
       - c7g.large
-    Description: EC2 Instance Type (t3.medium cost-effective baseline; c6i.large for high-traffic production)
+    Description: EC2 Instance Type (t3.medium baseline; c6i.large for high-traffic production)
 
   MinInstances:
     Type: Number
     Default: 1
-    Description: Minimum number of EC2 instances (1-Instance Standalone Architecture)
+    Description: Minimum number of EC2 instances
 
   MaxInstances:
     Type: Number
     Default: 1
-    Description: Maximum number of EC2 instances (1-Instance Standalone Architecture)
+    Description: Maximum number of EC2 instances
 
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: Existing VPC ID where LiveKit and the Shared ALB will be deployed
+
+  PublicSubnets:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: List of at least 2 existing Public Subnet IDs across different AZs for Shared ALB and EC2 instances
+
+  DomainName:
+    Type: String
+    Default: "livekit.dev.blueshirt.work"
+    Description: Full domain name for the LiveKit Server endpoint
+
+  HostedZoneId:
+    Type: AWS::Route53::HostedZone::Id
+    Description: Existing Route 53 Hosted Zone ID for dev.blueshirt.work (used for ACM DNS validation and Alias record)
 
 Resources:
   # ----------------------------------------------------------------------
-  # 1. AWS Secrets Manager (Auto-Generated Cryptographic API Credentials)
+  # 1. AWS Certificate Manager (Auto-Created Certificate with Route 53 DNS Validation)
+  # ----------------------------------------------------------------------
+  LiveKitCertificate:
+    Type: AWS::CertificateManager::Certificate
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      DomainName: !Ref DomainName
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Ref DomainName
+          HostedZoneId: !Ref HostedZoneId
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-acm-cert"
+
+  # ----------------------------------------------------------------------
+  # 2. AWS Secrets Manager (Auto-Generated Cryptographic API Credentials)
   # ----------------------------------------------------------------------
   LiveKitSecret:
     Type: AWS::SecretsManager::Secret
     Properties:
       Name: !Sub "${EnvironmentName}/livekit-credentials"
-      Description: LiveKit Server environment-derived API key and auto-generated cryptographic secret
+      Description: LiveKit Server cryptographically random API credentials
       GenerateSecretString:
-        SecretStringTemplate: !Sub '{"api_key": "LK_${AWS::StackName}_${AWS::Region}"}'
+        SecretStringTemplate: !Sub '{"api_key": "${AWS::StackId}"}'
         GenerateStringKey: "api_secret"
         PasswordLength: 32
         ExcludePunctuation: true
 
   # ----------------------------------------------------------------------
-  # 2. Dedicated WebRTC Security Group (Eliminates fragile EB logical IDs)
+  # 3. Security Groups (100% ALB-Managed Ingress - Zero Public EC2 Bypass)
   # ----------------------------------------------------------------------
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Public Ingress Security Group for livekit-production-alb
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        # HTTPS Port 443
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: Inbound HTTPS Public Traffic
+        # HTTP Port 80 (For HTTP -> HTTPS 301 Redirect)
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: Inbound HTTP Public Traffic (Redirect to HTTPS)
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-alb-sg"
+
   LiveKitSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Explicit Security Group for LiveKit WebRTC media and ICE traffic
+      GroupDescription: Fully Restricted EC2 Security Group - Ingress strictly from ALB only
+      VpcId: !Ref VpcId
       SecurityGroupIngress:
-        # Signaling & ALB Health Check (Port 7880)
+        # Signaling Port 7880 strictly restricted to ALB Security Group (Zero direct public ingress)
         - IpProtocol: tcp
           FromPort: 7880
           ToPort: 7880
-          CidrIp: 0.0.0.0/0
-          Description: LiveKit HTTP/WSS Signaling and Health Checks (Port 7880)
-        # WebRTC RTP Audio/Video Media Range
-        - IpProtocol: udp
-          FromPort: 50000
-          ToPort: 60000
-          CidrIp: 0.0.0.0/0
-          Description: WebRTC RTP Media Range (UDP 50000-60000)
-        # WebRTC ICE TCP Fallback
-        - IpProtocol: tcp
-          FromPort: 7881
-          ToPort: 7881
-          CidrIp: 0.0.0.0/0
-          Description: WebRTC ICE TCP Fallback (Port 7881)
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+          Description: LiveKit HTTP/WSS Signaling and Health Checks restricted strictly to ALB
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-webrtc-sg"
 
   # ----------------------------------------------------------------------
-  # 3. IAM Roles & Instance Profile
+  # 4. Custom Shared Application Load Balancer (livekit-production-alb)
+  # ----------------------------------------------------------------------
+  CustomALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "${EnvironmentName}-alb"
+      Type: application
+      Scheme: internet-facing
+      Subnets: !Ref PublicSubnets
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-alb"
+
+  # HTTP Port 80 Listener: Redirects all requests to HTTPS Port 443 (HTTP 301)
+  ALBHttpRedirectListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref CustomALB
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: redirect
+          RedirectConfig:
+            Port: "443"
+            Protocol: HTTPS
+            StatusCode: HTTP_301
+
+  # HTTPS Port 443 Listener: Mandatory HTTPS with Auto-Validated ACM Certificate
+  ALBHttpsListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    DependsOn: LiveKitCertificate
+    Properties:
+      LoadBalancerArn: !Ref CustomALB
+      Port: 443
+      Protocol: HTTPS
+      Certificates:
+        - CertificateArn: !Ref LiveKitCertificate
+      DefaultActions:
+        - Type: fixed-response
+          FixedResponseConfig:
+            StatusCode: "404"
+            ContentType: text/plain
+            MessageBody: "Not Found"
+
+  # Route 53 DNS Alias Record for livekit.dev.blueshirt.work pointing to Custom ALB
+  LiveKitDnsRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref DomainName
+      Type: A
+      AliasTarget:
+        HostedZoneId: !GetAtt CustomALB.CanonicalHostedZoneID
+        DNSName: !GetAtt CustomALB.DNSName
+        EvaluateTargetHealth: true
+
+  # ----------------------------------------------------------------------
+  # 5. IAM Roles & Instance Profile
   # ----------------------------------------------------------------------
   LiveKitEC2Role:
     Type: AWS::IAM::Role
@@ -134,23 +240,26 @@ Resources:
         - arn:aws:iam::aws:policy/AWSElasticBeanstalkManagedUpdatesCustomerRolePolicy
 
   # ----------------------------------------------------------------------
-  # 4. Elastic Beanstalk Application & Environment
+  # 6. Elastic Beanstalk Application & Environment (Shared ALB Mode)
   # ----------------------------------------------------------------------
   LiveKitApplication:
     Type: AWS::ElasticBeanstalk::Application
     Properties:
       ApplicationName: !Ref ApplicationName
-      Description: Standalone LiveKit WebRTC Server Application on Elastic Beanstalk
+      Description: LiveKit Signaling Server Application on Elastic Beanstalk
 
   LiveKitEnvironment:
     Type: AWS::ElasticBeanstalk::Environment
+    DependsOn:
+      - CustomALB
+      - ALBHttpsListener
     Properties:
       ApplicationName: !Ref LiveKitApplication
       EnvironmentName: !Ref EnvironmentName
-      Description: Standalone LiveKit Environment (1-Instance, Docker AL2023, Load-Balanced ALB)
+      Description: LiveKit Environment in Existing VPC with Shared Custom ALB, Auto-Created ACM Certificate, and 100% ALB Ingress
       SolutionStackName: !Ref SolutionStackName
       OptionSettings:
-        # Load Balancer Configuration: Explicit Application Load Balancer
+        # Load Balancer Configuration: Explicit Shared Application Load Balancer
         - Namespace: aws:elasticbeanstalk:environment
           OptionName: EnvironmentType
           Value: LoadBalanced
@@ -158,37 +267,18 @@ Resources:
           OptionName: LoadBalancerType
           Value: application
         - Namespace: aws:elasticbeanstalk:environment
+          OptionName: LoadBalancerIsShared
+          Value: 'true'
+        - Namespace: aws:elasticbeanstalk:environment
           OptionName: ServiceRole
           Value: !Ref LiveKitServiceRole
 
-        # Public IP configuration for EC2 instances (Required for WebRTC Direct UDP)
-        - Namespace: aws:ec2:vpc
-          OptionName: AssociatePublicIpAddress
-          Value: 'true'
+        # Shared Load Balancer Integration
+        - Namespace: aws:elbv2:loadbalancer
+          OptionName: SharedLoadBalancer
+          Value: !Ref CustomALB
 
-        # IAM & Security Group Configuration
-        - Namespace: aws:autoscaling:launchconfiguration
-          OptionName: IamInstanceProfile
-          Value: !Ref LiveKitInstanceProfile
-        - Namespace: aws:autoscaling:launchconfiguration
-          OptionName: InstanceType
-          Value: !Ref InstanceType
-        - Namespace: aws:autoscaling:launchconfiguration
-          OptionName: SecurityGroups
-          Value: !Ref LiveKitSecurityGroup
-
-        # Capacity Configuration (1-Instance Standalone Architecture)
-        - Namespace: aws:autoscaling:asg
-          OptionName: MinSize
-          Value: !Ref MinInstances
-        - Namespace: aws:autoscaling:asg
-          OptionName: MaxSize
-          Value: !Ref MaxInstances
-        - Namespace: aws:autoscaling:asg
-          OptionName: Cooldown
-          Value: '180'
-
-        # ALB Target Group Health Check on / (Port 7880)
+        # Elastic Beanstalk Process: Creates & manages Target Group on Port 7880
         - Namespace: aws:elasticbeanstalk:application
           OptionName: Application Healthcheck URL
           Value: /
@@ -205,14 +295,52 @@ Resources:
           OptionName: MatcherHTTPCode
           Value: '200'
 
-        # ALB Port 80 Listener (Plain HTTP for verification)
-        - Namespace: aws:elbv2:listener:default
-          OptionName: ListenerEnabled
-          Value: 'true'
-        - Namespace: aws:elbv2:listener:default
-          OptionName: Protocol
-          Value: HTTP
+        # Listener 443 & Rule Attachment
+        - Namespace: aws:elbv2:listener:443
+          OptionName: Rules
+          Value: default
+        - Namespace: aws:elbv2:listenerrule:default
+          OptionName: Process
+          Value: default
+        - Namespace: aws:elbv2:listenerrule:default
+          OptionName: PathPatterns
+          Value: /*
+        - Namespace: aws:elbv2:listenerrule:default
+          OptionName: Priority
+          Value: '1'
 
+        # Existing VPC & Public IP Configuration
+        - Namespace: aws:ec2:vpc
+          OptionName: VPCId
+          Value: !Ref VpcId
+        - Namespace: aws:ec2:vpc
+          OptionName: Subnets
+          Value: !Join [",", !Ref PublicSubnets]
+        - Namespace: aws:ec2:vpc
+          OptionName: AssociatePublicIpAddress
+          Value: 'true'
+
+        # IAM & Security Group Configuration
+        - Namespace: aws:autoscaling:launchconfiguration
+          OptionName: IamInstanceProfile
+          Value: !Ref LiveKitInstanceProfile
+        - Namespace: aws:autoscaling:launchconfiguration
+          OptionName: InstanceType
+          Value: !Ref InstanceType
+        - Namespace: aws:autoscaling:launchconfiguration
+          OptionName: SecurityGroups
+          Value: !Ref LiveKitSecurityGroup
+
+        # Capacity Configuration
+        - Namespace: aws:autoscaling:asg
+          OptionName: MinSize
+          Value: !Ref MinInstances
+        - Namespace: aws:autoscaling:asg
+          OptionName: MaxSize
+          Value: !Ref MaxInstances
+        - Namespace: aws:autoscaling:asg
+          OptionName: Cooldown
+          Value: '180'
 
         # Health-Based Rolling Update Policy
         - Namespace: aws:autoscaling:updatepolicy:rollingupdate
@@ -236,13 +364,25 @@ Resources:
           Value: !Sub "${EnvironmentName}/livekit-credentials"
 
 Outputs:
-  LiveKitEnvironmentUrl:
-    Description: LiveKit Server Environment URL (ALB Endpoint)
-    Value: !GetAtt LiveKitEnvironment.EndpointURL
+  VpcId:
+    Description: VPC ID where LiveKit is deployed
+    Value: !Ref VpcId
 
-  LiveKitApplicationName:
-    Description: Elastic Beanstalk Application Name
-    Value: !Ref LiveKitApplication
+  CustomAlbArn:
+    Description: Custom Shared Application Load Balancer ARN
+    Value: !Ref CustomALB
+
+  CustomAlbDnsName:
+    Description: Custom Shared Application Load Balancer DNS Name
+    Value: !GetAtt CustomALB.DNSName
+
+  DomainEndpoint:
+    Description: LiveKit Domain Endpoint URL
+    Value: !Sub "https://${DomainName}"
+
+  AcmCertificateArn:
+    Description: Auto-Created ACM Certificate ARN
+    Value: !Ref LiveKitCertificate
 
   LiveKitEnvironmentName:
     Description: Elastic Beanstalk Environment Name
@@ -253,5 +393,5 @@ Outputs:
     Value: !Ref LiveKitSecret
 
   LiveKitSecurityGroupId:
-    Description: LiveKit EC2 WebRTC Security Group ID
+    Description: LiveKit EC2 Security Group ID
     Value: !Ref LiveKitSecurityGroup
