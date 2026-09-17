@@ -1,0 +1,55 @@
+title LiveKit Text & Signaling Server on AWS Elastic Beanstalk (100% ALB Managed)
+direction right
+
+// ---------------- CLIENT LAYER ----------------
+Client [label: "LiveKit Chat Client\n(Browser/Mobile)", icon: user]
+Admin [label: "App Server /\nAdmin API", icon: user-check]
+
+// ---------------- EDGE & INGRESS (CUSTOM ALB) ----------------
+Route53 [label: "Route 53 DNS\n(livekit.dev.blueshirt.work)", icon: aws-route-53]
+
+IngressLayer [label: "Custom ALB: livekit-production-alb (Dual-AZ Subnets)"] {
+  ALB [label: "Shared Application Load Balancer", icon: aws-alb]
+  ACMCert [label: "ACM SSL Certificate\n(Auto-Validated TLS)", icon: lock]
+  ALBHttpRedirect [label: "Listener :80\n(HTTP 301 Redirect to :443)", icon: refresh-cw]
+  ALBHttpsListener [label: "Listener :443\n(HTTPS + Rule /*)", icon: lock]
+}
+
+// ---------------- SECURITY & CREDENTIALS ----------------
+SecurityServices [label: "Security & IAM"] {
+  ALBSG [label: "ALB Security Group\n(Inbound :443, :80 from 0.0.0.0/0)", icon: shield]
+  LiveKitSG [label: "LiveKit EC2 Security Group\n(Restricted :7880 from ALBSG ONLY)", icon: shield]
+  SecretsManager [label: "AWS Secrets Manager\n(Credentials)", icon: aws-secrets-manager]
+  IAMRole [label: "LiveKit EC2 IAM Role", icon: aws-iam]
+}
+
+// ---------------- EXISTING VPC & ELASTIC BEANSTALK HOST ----------------
+VPC [label: "Existing Customer VPC (Public Subnets Dual AZ)"] {
+  EBProcessTG [label: "EB Target Group / Process\n(Port :7880 HTTP)", icon: crosshair]
+  ComputePlatform [label: "Elastic Beanstalk Host (EC2 - AL2023 Docker)"] {
+    EntrypointInit [label: "entrypoint.sh\n(Secrets Loader)", icon: terminal]
+    RuntimeConfig [label: "livekit-runtime.yaml", icon: file-text]
+    LiveKitContainer [label: "LiveKit Server Container\n(Host Network)", icon: docker]
+  }
+}
+
+// ---------------- FLOW: 100% ALB MANAGED TRAFFIC ----------------
+Client > Route53: 1. DNS Query
+Route53 > ALB: Resolves CNAME
+Client > ALBHttpsListener: 2. WSS / HTTPS (Port 443)
+Admin > ALBHttpsListener: 2. REST API Calls
+Client > ALBHttpRedirect: 2. HTTP Port 80
+ALBHttpRedirect > ALBHttpsListener: 301 Redirect to 443
+
+ALBHttpsListener > ACMCert: SSL Offloading
+ALBHttpsListener > EBProcessTG: Injected Rule /*
+EBProcessTG > LiveKitSG: Ingress from ALBSG ONLY
+LiveKitSG > LiveKitContainer: 3. Health & Proxy (Port 7880)
+
+// ---------------- FLOW: BOOTSTRAP & SECRETS ----------------
+EntrypointInit > IAMRole: Uses Instance Profile
+IAMRole > SecretsManager: Authenticates
+EntrypointInit > SecretsManager: 4. Fetches API Keys
+SecretsManager > EntrypointInit: JSON Keys
+EntrypointInit > RuntimeConfig: 5. Generates Config
+RuntimeConfig > LiveKitContainer: 6. Starts livekit-server
